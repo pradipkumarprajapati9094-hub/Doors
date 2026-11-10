@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1216">
+<title>Door Watch</title>
+<style>
+/* Layout: one-screen night tool. Camera on top, controls below, alarm takes over the screen with a photo. */
+:root{
+  --bg:#0f1216; --panel:#181c22; --line:#2a3039; --fg:#e9edf2; --muted:#8b95a3;
+  --accent:#ffb020; --alert:#ff3b30; --ok:#34c759; --move:#4da3ff;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 var(--sans)}
+body{padding:env(safe-area-inset-top,0) max(12px,env(safe-area-inset-right,0px)) env(safe-area-inset-bottom,0) max(12px,env(safe-area-inset-left,0px))}
+header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-block:10px}
+h1{margin:0;font-size:18px;letter-spacing:.02em}
+.pill{font:600 12px var(--mono);padding:4px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap;max-width:65%;overflow:hidden;text-overflow:ellipsis}
+.pill.on{color:var(--ok);border-color:var(--ok)}
+.pill.warn{color:var(--accent);border-color:var(--accent)}
+.stage{position:relative;width:100%;background:#000;border-radius:10px;overflow:hidden;border:1px solid var(--line);touch-action:none}
+.stage video{display:block;width:100%;height:auto}
+.stage canvas{position:absolute;inset:0;width:100%;height:100%}
+.placeholder{padding:48px 16px;text-align:center;color:var(--muted)}
+.hint{font-size:13px;color:var(--muted);margin:6px 2px 0}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+button{font:600 15px var(--sans);border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--fg);padding:12px 14px;flex:1 1 auto;min-height:48px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#1a1200}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button:disabled{opacity:.45}
+details{margin-top:12px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+summary{font-weight:600;cursor:pointer}
+label{display:block;margin-top:14px;font-size:13px;color:var(--muted)}
+label b{color:var(--fg);font:600 13px var(--mono)}
+input[type=range]{width:100%}
+input[type=text],select{width:100%;margin-top:4px;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font:15px var(--sans)}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px;min-width:0}
+.stat span{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.stat b{font:600 16px var(--mono);font-variant-numeric:tabular-nums}
+.meter{height:6px;border-radius:3px;background:var(--line);margin-top:6px;position:relative;overflow:hidden}
+.meter i{position:absolute;inset:0 auto 0 0;width:0;background:var(--move);transition:width .2s}
+.meter s{position:absolute;top:0;bottom:0;width:2px;background:var(--fg);text-decoration:none}
+h2{font-size:14px;margin:16px 2px 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+#log{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+#log li{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;min-width:0}
+#log img{display:block;width:100%;height:auto;cursor:zoom-in}
+#log .cap{display:flex;justify-content:space-between;gap:6px;padding:6px 8px;font-size:12px}
+#log time{font:600 13px var(--mono)}
+#log .why{color:var(--muted)}
+#log .empty{grid-column:1/-1;color:var(--muted);font-size:13px;padding:10px;border-style:dashed}
+#viewer{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;padding:16px}
+#viewer img{max-width:100%;max-height:90vh;border-radius:6px}
+#alarm{position:fixed;inset:0;z-index:50;background:var(--alert);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;text-align:center;overflow:auto}
+#alarm.flash{animation:flash .5s steps(2) infinite}
+@keyframes flash{50%{background:#7a0d08}}
+#alarm h2{color:#fff;font-size:36px;margin:0;letter-spacing:.02em;text-transform:none}
+#alarm p{color:#fff;margin:0;font-size:18px}
+#alarmImg{max-width:100%;max-height:42vh;border:3px solid #fff;border-radius:8px;background:#000}
+#alarm button{flex:none;width:min(320px,90%);font-size:20px;min-height:64px;background:#fff;color:#000;border:none}
+@media (prefers-reduced-motion:reduce){#alarm.flash{animation:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Door Watch</h1>
+  <span id="status" class="pill">Off</span>
+</header>
+
+<div class="stage" id="stage">
+  <div class="placeholder" id="placeholder">Tap <b>Start watching</b>, allow the camera, then point the phone at the CCTV screen.</div>
+  <video id="video" playsinline muted hidden></video>
+  <canvas id="overlay" hidden></canvas>
+</div>
+<p class="hint" id="zoneHint">After starting: drag a box over the glass of the door. Only that area is watched.</p>
+
+<div class="row">
+  <button class="primary" id="startBtn">Start watching</button>
+  <button id="stopBtn" disabled>Stop</button>
+</div>
+<div class="row">
+  <button id="testBtn">Test alarm</button>
+  <button id="clearZoneBtn">Clear box</button>
+</div>
+
+<div class="stats">
+  <div class="stat"><span>Person</span><b id="sPeople">–</b></div>
+  <div class="stat"><span>Movement</span><b id="sMove">–</b><div class="meter"><i id="moveBar"></i><s id="moveMark"></s></div></div>
+  <div class="stat"><span>Speed</span><b id="sFps">–</b></div>
+</div>
+
+<details>
+  <summary>Settings</summary>
+
+  <label for="mode">Ring the alarm for</label>
+  <select id="mode">
+    <option value="both">Person OR movement (best at night)</option>
+    <option value="person">Person only (fewer false alarms)</option>
+    <option value="move">Movement only</option>
+  </select>
+  <p class="hint">Movement catches half-hidden people, shadows and knocking. Cars or headlights passing in the box can also set it off.</p>
+
+  <label for="sens">Movement sensitivity: <b id="sensV">7</b></label>
+  <input type="range" id="sens" min="1" max="10" step="1" value="7">
+  <p class="hint">Watch the blue Movement bar with nobody at the door. If it keeps crossing the white line, lower this.</p>
+
+  <label for="conf">Person confidence needed: <b id="confV">40%</b></label>
+  <input type="range" id="conf" min="25" max="90" step="5" value="40">
+
+  <label for="hold">Must last for: <b id="holdV">1.5 s</b></label>
+  <input type="range" id="hold" min="0.5" max="5" step="0.5" value="1.5">
+
+  <label for="boost">Night boost</label>
+  <select id="boost"><option value="off">Off</option><option value="mid">Medium</option><option value="high">Strong</option></select>
+  <p class="hint">Brightens the dark outside area before checking.</p>
+
+  <label for="acc">Person detector</label>
+  <select id="acc"><option value="fast">Fast (older phones)</option><option value="better">Better accuracy (slower)</option></select>
+
+  <div id="zoomWrap" hidden>
+    <label for="zoom">Camera zoom: <b id="zoomV">1.0×</b></label>
+    <input type="range" id="zoom" min="1" max="1" step="0.1" value="1">
+    <p class="hint">Zoom until the TV fills most of the picture, then redraw your box.</p>
+  </div>
+
+  <label for="cool">Quiet time after an alarm: <b id="coolV">30 s</b></label>
+  <input type="range" id="cool" min="10" max="120" step="10" value="30">
+
+  <label for="camSel">Camera</label>
+  <select id="camSel"><option value="environment">Back camera</option><option value="user">Front camera</option></select>
+
+  <label for="topic">Second phone alert (optional, ntfy app topic)</label>
+  <input type="text" id="topic" placeholder="e.g. quickie-door-k7x29" autocomplete="off" spellcheck="false">
+  <p class="hint">Sends only the text "Someone at the door". Photos stay on this phone.</p>
+  <div class="row"><button id="pushTestBtn">Send test to second phone</button></div>
+</details>
+
+<h2>Alerts tonight</h2>
+<ul id="log"><li class="empty">No alerts yet. Each alarm saves a photo of the door here.</li></ul>
+
+<div id="alarm" hidden>
+  <h2>Someone at the door</h2>
+  <img id="alarmImg" alt="Photo of the door when the alarm went off" hidden>
+  <p id="alarmTime"></p>
+  <button id="ackBtn">Got it</button>
+</div>
+<div id="viewer" hidden><img id="viewerImg" alt="Alert photo"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const video = $('video'), overlay = $('overlay'), ctx = overlay.getContext('2d');
+  const store = {
+    get(k, d){ try{ const v = localStorage.getItem('dw_'+k); return v === null ? d : JSON.parse(v); }catch(e){ return d; } },
+    set(k, v){ try{ localStorage.setItem('dw_'+k, JSON.stringify(v)); }catch(e){} }
+  };
+
+  // ---------- settings ----------
+  const S = {
+    mode: store.get('mode', 'both'), sens: store.get('sens', 7),
+    conf: store.get('conf2', 40), hold: store.get('hold', 1.5), cool: store.get('cool', 30),
+    boost: store.get('boost', 'mid'), acc: store.get('acc', 'better'),
+    topic: store.get('topic', ''), cam: store.get('cam', 'environment'), zone: store.get('zone', null)
+  };
+  const BOOST = { off: 'none', mid: 'brightness(1.6) contrast(1.4)', high: 'brightness(2.2) contrast(1.7)' };
+  ['mode','sens','conf','hold','cool','boost','acc','topic'].forEach(k => { $(k).value = S[k]; });
+  $('camSel').value = S.cam;
+  const paint = () => {
+    $('sensV').textContent = S.sens; $('confV').textContent = S.conf + '%';
+    $('holdV').textContent = S.hold + ' s'; $('coolV').textContent = S.cool + ' s';
+    $('moveMark').style.left = Math.min(100, moveNeed() * 100 / 12) + '%';
+  };
+  const key = k => k === 'conf' ? 'conf2' : k;
+  ['sens','conf','hold','cool'].forEach(k => $(k).addEventListener('input', e => { S[k] = +e.target.value; store.set(key(k), S[k]); paint(); }));
+  ['mode','boost'].forEach(k => $(k).addEventListener('change', e => { S[k] = e.target.value; store.set(k, S[k]); resetMotion(); }));
+  $('topic').addEventListener('change', e => { S.topic = e.target.value.trim(); store.set('topic', S.topic); });
+  $('camSel').addEventListener('change', e => { S.cam = e.target.value; store.set('cam', S.cam); if (running) { stop(); start(); } });
+  $('acc').addEventListener('change', async e => {
+    S.acc = e.target.value; store.set('acc', S.acc); model = null;
+    if (running) await ensureModel();
+  });
+
+  // Movement thresholds from sensitivity 1..10
+  const pixThresh = () => 40 - S.sens * 3;            // grey-level change for one pixel (37 .. 10)
+  const moveNeed  = () => Math.max(1, 11 - S.sens);   // active blocks needed (10 .. 1)
+
+  // ---------- state ----------
+  let model = null, modelLoading = false, stream = null, running = false, audio = null, wakeLock = null;
+  let firstSeen = 0, lastSeen = 0, coolUntil = 0, alarmOn = false, alarmTimer = null, siren = null;
+  let lastPeople = [], activeBlocks = [], drag = null, lastReason = '';
+  let frames = 0, fpsT = performance.now(), detecting = false;
+  const crop = document.createElement('canvas'), cropCtx = crop.getContext('2d', { willReadFrequently: true });
+  const small = document.createElement('canvas'), smallCtx = small.getContext('2d', { willReadFrequently: true });
+  let bg = null, warmUntil = 0;
+  const MW = 64, BS = 4; // motion image width and block size
+
+  const setStatus = (txt, cls) => { const s = $('status'); s.textContent = txt; s.className = 'pill ' + (cls || ''); };
+  function resetMotion(){ bg = null; warmUntil = performance.now() + 2000; activeBlocks = []; }
+
+  // ---------- sound ----------
+  function ensureAudio(){
+    if (!audio) { const AC = window.AudioContext || window.webkitAudioContext; audio = new AC(); }
+    if (audio.state === 'suspended') audio.resume();
+  }
+  function sirenStart(){
+    ensureAudio();
+    const osc = audio.createOscillator(), gain = audio.createGain(), lfo = audio.createOscillator(), lg = audio.createGain();
+    osc.type = 'square'; osc.frequency.value = 900; lfo.frequency.value = 2; lg.gain.value = 350;
+    lfo.connect(lg).connect(osc.frequency); gain.gain.value = 0.9;
+    osc.connect(gain).connect(audio.destination); osc.start(); lfo.start();
+    siren = { osc, lfo };
+  }
+  function sirenStop(){ if (siren) { try { siren.osc.stop(); siren.lfo.stop(); } catch(e) {} siren = null; } }
+
+  // ---------- photo ----------
+  function snapshot(){
+    // Photo of the box area, brightened, with a strip of context around it.
+    try {
+      const vw = video.videoWidth, vh = video.videoHeight; if (!vw) return null;
+      const z = S.zone || { x: 0, y: 0, w: 1, h: 1 };
+      const pad = 0.15;
+      const x = Math.max(0, z.x - z.w * pad), y = Math.max(0, z.y - z.h * pad);
+      const w = Math.min(1 - x, z.w * (1 + 2 * pad)), h = Math.min(1 - y, z.h * (1 + 2 * pad));
+      const sw = w * vw, sh = h * vh, sc = 720 / Math.max(sw, sh);
+      const c = document.createElement('canvas'); c.width = Math.round(sw * sc); c.height = Math.round(sh * sc);
+      const g = c.getContext('2d');
+      g.filter = BOOST[S.boost] || 'none';
+      g.drawImage(video, x * vw, y * vh, sw, sh, 0, 0, c.width, c.height);
+      g.filter = 'none';
+      // mark the watched box
+      g.strokeStyle = '#ffb020'; g.lineWidth = 3; g.setLineDash([10, 6]);
+      g.strokeRect((z.x - x) / w * c.width, (z.y - y) / h * c.height, z.w / w * c.width, z.h / h * c.height);
+      return c.toDataURL('image/jpeg', 0.8);
+    } catch(e) { return null; }
+  }
+
+  // ---------- alarm ----------
+  function fireAlarm(isTest){
+    const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const why = isTest ? 'Test' : lastReason;
+    const photo = video.videoWidth ? snapshot() : null;
+    $('alarmImg').hidden = !photo; if (photo) $('alarmImg').src = photo;
+    $('alarmTime').textContent = (isTest ? 'Test alarm · ' : why + ' · ') + t;
+    $('alarm').hidden = false; $('alarm').classList.add('flash');
+    alarmOn = true; sirenStart();
+    if (navigator.vibrate) navigator.vibrate([600,300,600,300,600,300,600]);
+    clearTimeout(alarmTimer); alarmTimer = setTimeout(ack, 20000);
+    if (!isTest) { addLog(t, why, photo); push('Someone at the door (' + why.toLowerCase() + ', ' + t + ')'); }
+  }
+  function ack(){
+    sirenStop(); clearTimeout(alarmTimer);
+    if (navigator.vibrate) navigator.vibrate(0);
+    $('alarm').hidden = true; $('alarm').classList.remove('flash');
+    alarmOn = false; coolUntil = performance.now() + S.cool * 1000; firstSeen = 0;
+    resetMotion();
+  }
+  $('ackBtn').addEventListener('click', ack);
+  $('testBtn').addEventListener('click', () => fireAlarm(true));
+
+  function addLog(t, why, photo){
+    const log = $('log'); const empty = log.querySelector('.empty'); if (empty) empty.remove();
+    const li = document.createElement('li');
+    if (photo) { const img = new Image(); img.alt = 'Door at ' + t; img.src = photo; li.appendChild(img); }
+    const cap = document.createElement('div'); cap.className = 'cap';
+    const tm = document.createElement('time'); tm.textContent = t;
+    const w = document.createElement('span'); w.className = 'why'; w.textContent = why;
+    cap.append(tm, w); li.appendChild(cap);
+    log.prepend(li);
+    while (log.children.length > 40) log.lastChild.remove();
+  }
+  $('log').addEventListener('click', e => { if (e.target.tagName === 'IMG') { $('viewerImg').src = e.target.src; $('viewer').hidden = false; } });
+  $('viewer').addEventListener('click', () => { $('viewer').hidden = true; });
+
+  async function push(msg, quiet){
+    if (!S.topic) { if (quiet) setStatus('Add a topic first', 'warn'); return; }
+    try {
+      await fetch('https://ntfy.sh/' + encodeURIComponent(S.topic), {
+        method: 'POST', body: msg, headers: { 'Title': 'Door Watch', 'Priority': 'urgent', 'Tags': 'rotating_light' }
+      });
+      if (quiet) setStatus('Test sent', 'on');
+    } catch(e) { setStatus('Push failed (no internet?)', 'warn'); }
+  }
+  $('pushTestBtn').addEventListener('click', () => push('Test from Door Watch', true));
+
+  // ---------- box drawing ----------
+  function pt(e){ const r = overlay.getBoundingClientRect(); return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) }; }
+  overlay.addEventListener('pointerdown', e => { overlay.setPointerCapture(e.pointerId); const p = pt(e); drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y }; });
+  overlay.addEventListener('pointermove', e => { if (!drag) return; const p = pt(e); drag.x1 = p.x; drag.y1 = p.y; draw(); });
+  overlay.addEventListener('pointerup', () => {
+    if (!drag) return;
+    const z = { x: Math.min(drag.x0, drag.x1), y: Math.min(drag.y0, drag.y1), w: Math.abs(drag.x1 - drag.x0), h: Math.abs(drag.y1 - drag.y0) };
+    drag = null;
+    if (z.w > 0.04 && z.h > 0.04) { S.zone = z; store.set('zone', z); $('zoneHint').textContent = 'Box saved. Drag again to redraw it.'; resetMotion(); }
+    draw();
+  });
+  $('clearZoneBtn').addEventListener('click', () => { S.zone = null; store.set('zone', null); resetMotion(); $('zoneHint').textContent = 'No box: the whole picture is watched. Drag a box over the door glass.'; draw(); });
+
+  function draw(){
+    const dpr = devicePixelRatio || 1;
+    const W = overlay.width = overlay.clientWidth * dpr, H = overlay.height = overlay.clientHeight * dpr;
+    ctx.clearRect(0, 0, W, H);
+    const z = drag ? { x: Math.min(drag.x0, drag.x1), y: Math.min(drag.y0, drag.y1), w: Math.abs(drag.x1 - drag.x0), h: Math.abs(drag.y1 - drag.y0) } : (S.zone || null);
+    const zz = z || { x: 0, y: 0, w: 1, h: 1 };
+    // movement blocks
+    if (!drag && activeBlocks.length) {
+      ctx.fillStyle = 'rgba(77,163,255,.45)';
+      for (const b of activeBlocks) ctx.fillRect((zz.x + b.x * zz.w) * W, (zz.y + b.y * zz.h) * H, b.w * zz.w * W, b.h * zz.h * H);
+    }
+    if (z) {
+      ctx.lineWidth = 3 * dpr;
+      ctx.fillStyle = 'rgba(255,176,32,.10)'; ctx.fillRect(z.x*W, z.y*H, z.w*W, z.h*H);
+      ctx.setLineDash([10*dpr, 6*dpr]); ctx.strokeStyle = '#ffb020'; ctx.strokeRect(z.x*W, z.y*H, z.w*W, z.h*H); ctx.setLineDash([]);
+    }
+    ctx.font = `600 ${13*dpr}px system-ui,sans-serif`; ctx.lineWidth = 3 * dpr;
+    for (const p of lastPeople) {
+      ctx.strokeStyle = '#ff3b30'; ctx.strokeRect(p.x*W, p.y*H, p.w*W, p.h*H);
+      const label = 'person ' + Math.round(p.score*100) + '%';
+      ctx.fillStyle = '#ff3b30'; ctx.fillRect(p.x*W, p.y*H - 18*dpr, ctx.measureText(label).width + 10*dpr, 18*dpr);
+      ctx.fillStyle = '#000'; ctx.fillText(label, p.x*W + 5*dpr, p.y*H - 5*dpr);
+    }
+  }
+
+  // ---------- movement detector ----------
+  // Shrinks the box to 64 px wide, removes overall brightness changes, compares with a slowly learned
+  // "empty door" picture, and counts 4×4 blocks where enough pixels changed.
+  function motionCheck(){
+    const mh = Math.max(BS, Math.round(MW * crop.height / crop.width / BS) * BS);
+    small.width = MW; small.height = mh;
+    smallCtx.drawImage(crop, 0, 0, MW, mh);
+    const d = smallCtx.getImageData(0, 0, MW, mh).data, n = MW * mh;
+    const g = new Float32Array(n); let mean = 0;
+    for (let i = 0; i < n; i++) { const v = 0.299*d[i*4] + 0.587*d[i*4+1] + 0.114*d[i*4+2]; g[i] = v; mean += v; }
+    mean /= n; for (let i = 0; i < n; i++) g[i] -= mean;
+    if (!bg || bg.length !== n) { bg = g; return 0; }
+    const T = pixThresh(), cols = MW / BS, rows = mh / BS, blocks = [];
+    for (let by = 0; by < rows; by++) for (let bx = 0; bx < cols; bx++) {
+      let c = 0;
+      for (let y = 0; y < BS; y++) for (let x = 0; x < BS; x++) {
+        const i = (by*BS + y) * MW + bx*BS + x;
+        if (Math.abs(g[i] - bg[i]) > T) c++;
+      }
+      if (c >= 6) blocks.push({ x: bx / cols, y: by / rows, w: 1 / cols, h: 1 / rows });
+    }
+    // Learn the empty scene: quickly when calm, slowly while something is there.
+    const rate = blocks.length >= moveNeed() ? 0.01 : 0.06;
+    for (let i = 0; i < n; i++) bg[i] += (g[i] - bg[i]) * rate;
+    if (performance.now() < warmUntil) { activeBlocks = []; return 0; }
+    activeBlocks = blocks;
+    return blocks.length;
+  }
+
+  async function ensureModel(){
+    if (model || modelLoading || S.mode === 'move') return;
+    modelLoading = true; setStatus('Loading person detector…', 'warn');
+    try { model = await cocoSsd.load({ base: S.acc === 'better' ? 'mobilenet_v2' : 'lite_mobilenet_v2' }); setStatus('Watching', 'on'); }
+    catch(e) { setStatus('Person detector failed: movement only', 'warn'); }
+    modelLoading = false;
+  }
+
+  // ---------- main loop ----------
+  async function loop(){
+    if (!running) return;
+    if (video.readyState >= 2 && !document.hidden && !detecting) {
+      detecting = true;
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const z = S.zone || { x: 0, y: 0, w: 1, h: 1 };
+      const sx = z.x * vw, sy = z.y * vh, sw = Math.max(16, z.w * vw), sh = Math.max(16, z.h * vh);
+      const scale = 640 / Math.max(sw, sh);
+      crop.width = Math.round(sw * scale); crop.height = Math.round(sh * scale);
+      cropCtx.filter = BOOST[S.boost] || 'none';
+      cropCtx.drawImage(video, sx, sy, sw, sh, 0, 0, crop.width, crop.height);
+      cropCtx.filter = 'none';
+
+      // movement
+      const moved = S.mode === 'person' ? 0 : motionCheck();
+      if (S.mode === 'person') activeBlocks = [];
+      const need = moveNeed();
+      $('sMove').textContent = S.mode === 'person' ? 'off' : (moved >= need ? 'YES' : moved);
+      $('moveBar').style.width = Math.min(100, moved * 100 / 12) + '%';
+
+      // person
+      lastPeople = [];
+      if (S.mode !== 'move' && model) {
+        let preds = [];
+        try { preds = await model.detect(crop, 10, 0.2); } catch(e) {}
+        lastPeople = preds.filter(p => p.class === 'person' && p.score * 100 >= S.conf).map(p => ({
+          x: z.x + (p.bbox[0] / crop.width) * z.w, y: z.y + (p.bbox[1] / crop.height) * z.h,
+          w: (p.bbox[2] / crop.width) * z.w, h: (p.bbox[3] / crop.height) * z.h, score: p.score
+        }));
+      }
+      $('sPeople').textContent = S.mode === 'move' ? 'off' : (model ? (lastPeople.length ? 'YES' : 'no') : '…');
+
+      const person = lastPeople.length > 0, motion = S.mode !== 'person' && moved >= need;
+      const now = performance.now();
+      if (person || motion) {
+        lastReason = person ? 'Person' : 'Movement';
+        if (!firstSeen || now - lastSeen > 1200) firstSeen = now;
+        lastSeen = now;
+        if (!alarmOn && now > coolUntil && now - firstSeen >= S.hold * 1000) fireAlarm(false);
+      }
+      draw();
+      frames++;
+      if (now - fpsT > 2000) { $('sFps').textContent = (frames * 1000 / (now - fpsT)).toFixed(1) + '/s'; frames = 0; fpsT = now; }
+      detecting = false;
+    }
+    setTimeout(loop, 200);
+  }
+
+  // ---------- start / stop ----------
+  async function keepAwake(){ try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e) {} }
+  document.addEventListener('visibilitychange', () => {
+    if (!running) return;
+    if (document.hidden) setStatus('Paused: keep this screen open', 'warn');
+    else { setStatus('Watching', 'on'); keepAwake(); resetMotion(); }
+  });
+
+  function setupZoom(track){
+    let caps = {};
+    try { caps = track.getCapabilities ? track.getCapabilities() : {}; } catch(e) {}
+    if (!caps.zoom || caps.zoom.max <= caps.zoom.min) { $('zoomWrap').hidden = true; return; }
+    const zr = $('zoom');
+    zr.min = caps.zoom.min; zr.max = caps.zoom.max; zr.step = caps.zoom.step || 0.1;
+    const saved = Math.min(caps.zoom.max, Math.max(caps.zoom.min, store.get('zoom', caps.zoom.min)));
+    zr.value = saved; $('zoomV').textContent = (+saved).toFixed(1) + '×';
+    track.applyConstraints({ advanced: [{ zoom: saved }] }).catch(() => {});
+    zr.oninput = () => {
+      const v = +zr.value; $('zoomV').textContent = v.toFixed(1) + '×'; store.set('zoom', v);
+      track.applyConstraints({ advanced: [{ zoom: v }] }).catch(() => {}); resetMotion();
+    };
+    $('zoomWrap').hidden = false;
+  }
+
+  async function start(){
+    ensureAudio();
+    $('startBtn').disabled = true;
+    try {
+      setStatus('Opening camera…', 'warn');
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: S.cam }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+      video.srcObject = stream; video.hidden = false; overlay.hidden = false; $('placeholder').hidden = true;
+      await video.play();
+      setupZoom(stream.getVideoTracks()[0]);
+      running = true; $('stopBtn').disabled = false; resetMotion();
+      setStatus('Watching', 'on');
+      if (!S.zone) $('zoneHint').textContent = 'Drag a box over the door glass on the TV. Without a box, the whole picture is watched.';
+      keepAwake(); loop();
+      ensureModel();
+    } catch(e) {
+      $('startBtn').disabled = false;
+      const m = (e && e.name === 'NotAllowedError') ? 'Camera blocked: allow it in browser settings' : 'Could not start: ' + (e && e.message || e);
+      setStatus(m, 'warn');
+    }
+  }
+  function stop(){
+    running = false;
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null; lastPeople = []; activeBlocks = []; draw();
+    try { wakeLock && wakeLock.release(); } catch(e) {}
+    $('startBtn').disabled = false; $('stopBtn').disabled = true;
+    setStatus('Off');
+  }
+  $('startBtn').addEventListener('click', start);
+  $('stopBtn').addEventListener('click', stop);
+  window.addEventListener('resize', draw);
+  paint();
+})();
+</script>
+</body>
+</html>
